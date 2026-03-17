@@ -2,6 +2,8 @@
 
 A step-by-step guide for implementing server-side Google Tag Manager (sGTM) using Stape.io, with Custom Loader for maximum measurement accuracy and ITP mitigation.
 
+[日本語版はこちら](README_ja.md)
+
 ---
 
 ## Table of Contents
