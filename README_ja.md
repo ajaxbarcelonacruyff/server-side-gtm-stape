@@ -1,121 +1,137 @@
-# サーバーサイドGTM（sGTM）導入ガイド：Stape.io 対応版
+# GA4計測をサーバーサイドへ。見えていなかったデータを、取り戻す。
 
-Stape.io を利用してサーバーサイドGTMを構築し、Custom Loaderで計測精度を最大化するための手順をまとめています。
+[English version](README.md)
+
+Stape.io と Custom Loader を使ったサーバーサイドGTM（sGTM）の導入ガイドです。セットアップ手順だけでなく、HubSpot + Cloudflare 環境で直面した制約と、実環境テストに基づく推奨構成を記録しています。
 
 ---
 
 ## 目次
 
-1. [サーバーコンテナの準備（GTM）](#1-サーバーコンテナの準備gtm)
-2. [インフラ構築とCustom Loader設定（Stape.io）](#2-インフラ構築とcustom-loader設定stapeio)
-3. [Webサイト側の実装変更](#3-webサイト側の実装変更)
-4. [サーバーコンテナ側の設定](#4-サーバーコンテナ側の設定)
-5. [Custom Loaderとは？](#custom-loaderとは)
-6. [ITP対策：同一ドメイン構成](#itp対策同一ドメイン構成)
-7. [疎通確認チェックリスト](#疎通確認チェックリスト)
+1. [構築するもの](#1-構築するもの)
+2. [アーキテクチャ概要](#2-アーキテクチャ概要)
+3. [なぜこの構成か？](#3-なぜこの構成か)
+4. [前提条件](#4-前提条件)
+5. [セットアップ手順](#5-セットアップ手順)
+6. [疎通確認チェックリスト](#6-疎通確認チェックリスト)
+7. [既知の制約](#7-既知の制約)
+8. [関連ドキュメント](#8-関連ドキュメント)
 
 ---
 
-## 1. サーバーコンテナの準備（GTM）
+## 1. 構築するもの
 
-1. **コンテナ作成**: GTMで「新規コンテナ」を作成し、ターゲットプラットフォームで **「サーバー」** を選択。
-2. **手動設定**: 「タグ付けサーバーを手動で設定する」を選択し、表示された **「コンテナ設定コード」** をコピー。
+**対象読者:** HubSpot（またはその他SaaSホスティング）上でGA4を運用しており、広告ブロッカーやブラウザのプライバシー制限によるデータ欠損を疑っているチーム。
 
-## 2. インフラ構築とCustom Loader設定（Stape.io）
+**得られるもの:**
 
-1. **コンテナ登録**: Stapeにログインし、コピーしたコードを貼り付けてコンテナを作成。
-2. **カスタムドメイン設定**:
-   - `Add Custom Domain` でサブドメイン（例: `sgtm.example.com`）を登録。
-   - DNSレコード（A/CNAME）をドメイン管理サービスに登録。
-3. **Custom Loaderの有効化**:
-   - Stapeの「Power-ups」タブから **「Custom Loader」** を選択して有効化。
-   - **Same Origin Path**（任意）: `metrics` や `lib` など、サイトの一部に見えるパスを入力（高度な設定用）。
-   - 生成された **新しいインストール用コード** をコピーしておく。
+- GTMスクリプトを `googletagmanager.com` ではなく自社ドメインから配信
+- GA4イベントをサーバーコンテナ経由で送信し、クライアントサイドのブロックを回避
+- 1st Party Cookieの寿命を延長し、Safari ITPの影響を軽減
+- 実際のデータロスを評価するための計測ベースライン
 
-## 3. Webサイト側の実装変更
-
-1. **GTMコードの差し替え**: サイトに埋め込んでいる標準のGTMコードを、手順2でStapeから取得した **Custom Loader用のコード** に差し替える。
-2. **Googleタグの修正**:
-   - Webコンテナ内の「Googleタグ」を開く。
-   - 設定パラメータに `server_container_url` を追加。
-   - 値に **StapeのカスタムドメインURL**（`https://sgtm.example.com`）を入力。
-
-## 4. サーバーコンテナ側の設定
-
-1. **コンテナURLの登録**: 「管理」＞「コンテナ設定」で、カスタムドメインURLを登録。
-2. **動的変数の作成**: 「変数」＞「イベントデータ」でパスを `measurement_id` とし、変数を作成。
-3. **トリガー作成**: 「トリガー」＞「カスタム」で「すべてのイベント」を選択した `All Events` を作成。
-4. **GA4サーバータグ作成**: タグの種類「GA4」を選択し、測定IDに作成した変数を、トリガーに `All Events` を設定。
+サイトの移行やホスティングの変更は不要です。サイト側の変更はGTMコードの差し替えのみです。
 
 ---
 
-## Custom Loaderとは？
+## 2. アーキテクチャ概要
 
-通常、GTMのスクリプトは `googletagmanager.com/gtm.js` から読み込まれますが、これを**自分のサブドメイン（例: `sgtm.example.com/xxxx.js`）から読み込ませる機能**です。
+### 標準的なStape構成（サブドメイン）
 
-### 主なメリット
+```
+ブラウザ
+  │
+  ├── www.example.com                → HubSpot（変更なし）
+  └── sgtm.example.com              → Cloudflare DNS（CNAME）
+        └── your-container.stape.io  → Stape sGTMサーバーコンテナ
+              ├── /gtm.js           ← Custom Loader: 自社サブドメインからスクリプト配信
+              └── /collect          ← GA4イベントをGoogleへ転送
+```
 
-- **広告ブロック（AdBlock）回避**: 通信先が自社ドメインになるため、広告ブロックツールによってGTM自体が遮断されるリスクを大幅に軽減します。
-- **ITP対策（Cookie寿命の延長）**: スクリプトの配信元とデータの送信先が同一の1st Partyドメインになることで、SafariなどのブラウザによるCookie制限を受けにくくなります。
-- **検知回避**: GTM特有のファイル名やパスを隠蔽できるため、より確実にデータをサーバーへ届けられます。
+**コンポーネント:**
+
+| コンポーネント | 役割 |
+|--------------|------|
+| GTM Webコンテナ | ブラウザでタグを実行し、イベントをサーバーコンテナへルーティング |
+| Stape.io | sGTMサーバーコンテナをホスト。Custom Loaderとカスタムドメインを管理 |
+| Custom Loader | GTMスクリプトを `googletagmanager.com` ではなく自社サブドメインから配信 |
+| sgtm.example.com | スクリプトとイベントの1st Partyエンドポイントとして機能するサブドメイン |
+| GA4サーバータグ | サーバーサイドでイベントを受信し、Google Analyticsへ転送 |
+
+### 検討した構成: パスベースの同一オリジン構成
+
+```
+ブラウザ
+  └── example.com/sgtm/*  ──Cloudflare Worker──→  Stape sGTM
+```
+
+すべてのトラッキングリクエストが同一オリジンとなり、完全な1st Party Cookie扱いになります。HubSpot環境でこれが機能しなかった理由は[セクション7](#7-既知の制約)を参照してください。
 
 ---
 
-## ITP対策：同一ドメイン構成
+## 3. なぜこの構成か？
 
-### サブドメインだけでは不十分な理由
+### 課題
 
-標準的なStape構成では、sGTMサーバーはサブドメイン（例: `sgtm.example.com`）上に置かれます。SafariのITPはサブドメインも別オリジンとして扱うため、そのサブドメインがトラッカーとして判定された場合、Cookie制限が適用される可能性があります。
+標準的なクライアントサイドGTMには、3つの問題が重なっています。
 
-```
-ブラウザ → www.example.com      (メインサイト)
-         → sgtm.example.com     (Stape sGTM) ← 別オリジン扱い
-```
+1. **広告ブロッカー** が `googletagmanager.com` や `google-analytics.com` へのリクエストを遮断し、イベントが無断で破棄される。
+2. **Safari ITP** がJavaScriptで設定されたCookieの有効期限をトラッキング分類に応じて7日以下に制限し、リピーターのアトリビューションが途切れる。
+3. **サードパーティスクリプトのブロック** — 明示的な広告ブロッカーがなくても、ブラウザがサードパーティスクリプトをデフォルトで制限する傾向が強まっている。
 
-### 真の1st Party化：メインドメインのパス経由でルーティング
+サーバーサイドGTMは計測ロジックをクライアントから分離します。スクリプトは自社ドメインから読み込み、イベントはサーバーで処理され、Cookieはサーバーサイドでより長い有効期限で設定できます。
 
-sGTMへのトラフィックを**メインドメインのパス**経由でルーティングすることで、ブラウザはすべてのリクエストを同一オリジンとみなし、完全な1st Party扱いのCookieが発行されます。
+### パスベース vs サブドメイン
 
-```
-ブラウザ → www.example.com/analytics/collect  ──proxy──→  Stape sGTM
-```
+| アプローチ | ITP保護 | 複雑さ | HubSpot対応 |
+|----------|---------|-------|------------|
+| サブドメイン (`sgtm.example.com`) | 部分的 | 低 | 可 |
+| パスベース (`example.com/sgtm/*`) | 完全（同一オリジン） | 中 | **不可** * |
 
-### 実装方法の比較
+\* HubSpotのCloudflare for SaaSレイヤーがカスタムWorker Routeより優先されるため — [セクション7](#7-既知の制約)を参照。
 
-| 方法 | 難易度 | 条件 |
-|------|--------|------|
-| **Cloudflare Workers**（推奨） | ★☆☆ | ドメインがCloudflare上にある |
-| **Nginx/Apache リバースプロキシ** | ★★★ | サーバーを直接管理できる |
-| **その他CDNのリバースプロキシ** | ★★☆ | CloudFront・Vercel・Netlifyなど |
+パスベースのアプローチは理論上より強力です。Safariは `example.com/sgtm/` を `example.com` と同一オリジンとして扱うため、トラッカー分類が適用されません。ただし、メインドメイン上のリバースプロキシを経由するルーティングが必要です。
 
-> HubSpotなどのSaaSホスティングでサーバーを直接操作できない場合、Cloudflare Workersが現実的な唯一の選択肢です。
+**HubSpotの制約:** HubSpotは内部でCloudflare for SaaSを利用しています。そのため、HubSpotのCloudflareレイヤーが自分のCloudflare Workerより先にリクエストを処理し、パスベースのWorkerルーティングはWorkerが発火せず404を返します。詳細な調査は [sgtm-worker-issue.md](sgtm-worker-issue.md) を参照してください。
 
-### 前提・コスト
+### 推奨構成
 
-| 項目 | 内容 |
-|------|------|
-| Cloudflareプラン | **無料**で可 |
-| サイト側の変更 | GTMコードの差し替えのみ |
-| DNSレジストラの変更 | ネームサーバーの書き換えのみ（ドメイン移管は不要） |
+サブドメイン構成（`sgtm.example.com`）で運用を開始してください。ITPのサブドメイン1st Party Cookieへの実影響は限定的です。Safariがトラッカーと判定した場合のみCookieが制限されます。まずデータ収集を開始し、GA4のデータで計測可能なアトリビューション損失が確認された場合のみ、パスベースルーティングを再検討してください。
 
-### 手順：Cloudflare Workersを使った設定
+---
 
-#### ① Cloudflare登録・DNS移行
+## 4. 前提条件
 
-1. [cloudflare.com](https://cloudflare.com) で無料アカウントを作成。
-2. 「Add a Site」でドメインを入力 → 既存DNSレコードが**自動インポート**される。
-3. インポート結果を確認し、ホスティング先へのCNAMEレコードおよびメール用MXレコードの漏れがないかチェック。
-4. ドメイン管理会社（お名前.comなど）のネームサーバー設定画面で、Cloudflareから指定された2つのネームサーバーに変更する。
+| 要件 | 詳細 |
+|-----|------|
+| Google Tag Managerアカウント | Webコンテナがサイトにインストール済み |
+| Stape.ioアカウント | 無料プランで開始可能 |
+| カスタムドメイン | DNS管理権限があること（Cloudflareまたはレジストラ経由） |
+| Cloudflareアカウント | 無料プラン。カスタムサブドメインのDNS管理に必要 |
+| GA4プロパティ | 測定ID（形式: `G-XXXXXXXXXX`） |
 
-#### ② SSL設定（重要）
+> ドメインのDNSがまだCloudflareにない場合、レジストラでネームサーバーを変更する必要があります。これはドメインの所有権を移転するものではなく、DNS管理のみがCloudflareに移ります。詳細は [cloudflare-nameserver-note.md](cloudflare-nameserver-note.md) を参照。
 
-- Cloudflare管理画面 → SSL/TLS → **「Full」** を選択。
-- 「Flexible」にすると無限リダイレクトが発生してサイトが壊れるため必ず確認。
+---
 
-#### ③ Cloudflare Worker作成
+## 5. セットアップ手順
 
-1. 「Workers & Pages」→「Create Worker」。
-2. デフォルトのコードを以下に差し替える（`your-container.stape.io` は実際のStapeコンテナURLに変更）：
+詳細な手順は [sgtm-setup.md](sgtm-setup.md) を参照してください。以下は5ステップの要約です。
+
+**ステップ1 — GTMサーバーコンテナの作成**
+GTMで「新規コンテナ」を作成し、ターゲットプラットフォームに「サーバー」を選択。「タグ付けサーバーを手動で設定する」を選び、コンテナ設定コードをコピー。
+
+**ステップ2 — Stape.ioでのサーバー構築**
+コンテナ設定コードをStapeに貼り付けてサーバーコンテナを作成。カスタムドメイン（`sgtm.example.com`）を追加し、Power-upsから **Custom Loader** を有効化。必要に応じてSame Origin Pathを設定（例: `lib`）。Stapeが生成する新しいGTMインストールコードをコピー。
+
+**ステップ3 — サイトの更新**
+サイトの標準GTMスニペットをStapeのCustom Loaderスニペットに差し替え。GTM Webコンテナ内のGoogleタグに設定パラメータ `server_container_url` = `https://sgtm.example.com` を追加。
+
+**ステップ4 — サーバーコンテナの設定**
+サーバーコンテナ設定でカスタムドメインURLを登録。`measurement_id` のイベントデータ変数、All Eventsトリガー、GA4サーバータグを作成。
+
+**ステップ5 — （オプション）パスベースルーティング用Cloudflare Worker**
+HubSpot以外のサイトで完全な同一オリジン保護が必要な場合、`example.com/sgtm/*` をStapeコンテナにプロキシするCloudflare Workerを追加:
 
 ```javascript
 export default {
@@ -127,26 +143,47 @@ export default {
 };
 ```
 
-3. Workerを保存・デプロイ。
-
-#### ④ Workerのルーティング設定
-
-- 該当Worker →「Settings」→「Triggers」→「Add Route」。
-- ルートに `www.example.com/analytics/*` を指定。
-
-#### ⑤ Stape・GTM側の変更
-
-- Stape Custom Loader設定の **「Same Origin Path」** に `analytics` を入力。
-- WebコンテナのGoogleタグ内 `server_container_url` を `https://www.example.com/analytics` に更新。
-
-対応プラットフォーム：**Cloudflare**、Nginx、Apache、AWS CloudFront、Azure Front Door、Vercel、Netlifyなど。
-詳細は [Stape Same Originドキュメント](https://stape.io/helpdesk/documentation/guidelines/how-to-use-same-origin) を参照。
+Workerルートを `example.com/sgtm/*` に設定し、StapeのSame Origin Pathを `/sgtm` に、GTMの `server_container_url` を `https://example.com/sgtm` に更新。
 
 ---
 
-## 疎通確認チェックリスト
+## 6. 疎通確認チェックリスト
 
-- [ ] **ブラウザコンソール**: `gtm.js` の読み込み元がカスタムドメイン/パス（`googletagmanager.com` ではない）になっているか。
-- [ ] **Networkタブ**: `collect?` リクエストのStatusが `200` または `204` で、送信先がカスタムドメイン/パスか。
-- [ ] **サーバープレビュー**: 左側リストにイベントが届き、「Tags Fired」にGA4タグがあるか。
-- [ ] **Healthチェック**: `https://[カスタムドメイン]/health` にアクセスして `ok` と表示されるか。
+各デプロイ手順の後に以下を確認し、エンドツーエンドで正常に動作していることを検証してください。
+
+- [ ] **スクリプトソース**: DevTools > Networkで、`gtm.js` が `googletagmanager.com` ではなく `sgtm.example.com`（またはカスタムパス）から読み込まれていることを確認。
+- [ ] **イベント送信**: `collect?` リクエストをフィルタリング。ステータスが `200` または `204` で、リクエスト先がカスタムドメイン/パスであること。
+- [ ] **サーバープレビュー**: GTMサーバーコンテナのプレビューを開き、左側のイベントリストにイベントが表示され、「Tags Fired」にGA4タグが表示されていること。
+- [ ] **Healthエンドポイント**: ブラウザで `https://sgtm.example.com/health` にアクセスし、`ok` と表示されること。
+- [ ] **GA4 DebugView**: URLに `?gtm_debug=x` を付加し、GA4のDebugViewにリアルタイムでイベントが表示されることを確認。
+- [ ] **Cookie確認**: DevTools > Application > Cookiesで、`_ga` および `_ga_XXXXXXXX` Cookieが存在し、自社ドメインに設定されていること。
+
+---
+
+## 7. 既知の制約
+
+### パスベースルーティングはHubSpot環境で機能しない
+
+`example.com/sgtm/*` をCloudflare Worker経由でStapeにルーティングし、完全な同一オリジンを実現することを目指しましたが、以下の理由で失敗しました。
+
+- HubSpotは内部で **Cloudflare for SaaS** を利用している。
+- HubSpotがホストするドメインでは、HubSpotのCloudflare for SaaSレイヤーが、同一Cloudflareネットワーク内のカスタムWorker Routeよりも優先される。
+- レスポンスヘッダー `x-hs-cfworker-meta: {"resolver":"NotFoundResolver"}` が、HubSpotのエッジが404を返しWorkerが発火しなかったことを示している。
+
+Cloudflare Workers / Route設定内での回避策は見つかりませんでした。これを機能させるには、HubSpot以外でサイトをホスティングする（例: Cloudflare Pages、Vercel、Netlify）必要があり、その場合ルーティングの完全な制御が可能になります。
+
+DNS設定、Workerコード、テストしたルート、レスポンスヘッダー分析を含む完全な調査報告は [sgtm-worker-issue.md](sgtm-worker-issue.md) を参照してください。
+
+### サブドメインのITPリスクは実在するが限定的
+
+`sgtm.example.com` はサブドメインです。SafariのITPはトラッキング挙動を検出した場合、これをクロスサイトトラッカーとして分類する可能性があります。ただし実際には、同一登録ドメイン上の1st Partyサブドメインがこの判定を受けることは稀であり、影響はトラッキング同意のないSafariユーザーに限定されます。推奨アプローチは、サブドメイン構成で運用を開始し、GA4データを監視し、有意なアトリビューション損失が確認された場合にのみ対応を検討することです。
+
+---
+
+## 8. 関連ドキュメント
+
+| ドキュメント | 内容 |
+|-------------|------|
+| [sgtm-setup.md](sgtm-setup.md) | 詳細セットアップガイド: GTMサーバーコンテナ、Stape Custom Loader、Cloudflare Workers（日本語） |
+| [sgtm-worker-issue.md](sgtm-worker-issue.md) | 調査報告: HubSpotサイトでCloudflare Workerパスベースルーティングが機能しない理由（日本語） |
+| [cloudflare-nameserver-note.md](cloudflare-nameserver-note.md) | Cloudflareネームサーバー委任が必要な理由とStapeドメイン設定の注意点（日本語） |
