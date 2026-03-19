@@ -2,6 +2,14 @@
 
 Stape.io を利用してサーバーサイドGTMを構築し、Custom Loaderで計測精度を最大化するための手順をまとめています。
 
+## 関連ドキュメント
+
+| ドキュメント | 内容 |
+|-------------|------|
+| [sgtm-setup.md](sgtm-setup.md) | HubSpot + Cloudflare Workers 構成を含む詳細セットアップガイド |
+| [sgtm-worker-issue.md](sgtm-worker-issue.md) | 調査報告：HubSpot（Cloudflare for SaaS）環境でWorkerルーティングが機能しない問題 |
+| [cloudflare-nameserver-note.md](cloudflare-nameserver-note.md) | Cloudflareネームサーバーが必要な理由とStapeドメイン設定の注意点 |
+
 ---
 
 ## 目次

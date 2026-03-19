@@ -4,6 +4,14 @@ A step-by-step guide for implementing server-side Google Tag Manager (sGTM) usin
 
 [日本語版はこちら](README_ja.md)
 
+## Related Documents
+
+| Document | Description |
+|----------|-------------|
+| [sgtm-setup.md](sgtm-setup.md) | Setup guide with HubSpot + Cloudflare Workers configuration (JP) |
+| [sgtm-worker-issue.md](sgtm-worker-issue.md) | Investigation report: Cloudflare Worker routing fails with HubSpot (Cloudflare for SaaS) (JP) |
+| [cloudflare-nameserver-note.md](cloudflare-nameserver-note.md) | Why Cloudflare nameservers are required and Stape domain configuration notes (JP) |
+
 ---
 
 ## Table of Contents
